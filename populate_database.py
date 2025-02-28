@@ -1,39 +1,127 @@
-import pandas as pd
-from sqlalchemy import create_engine
+import random
+import datetime
+from sqlalchemy import create_engine, Column, Integer, String, Date, ForeignKey, Float
+from sqlalchemy.orm import declarative_base, sessionmaker
 
-# Database connection string (Update 'your_user' and 'your_password' accordingly)
-DATABASE_URL = "postgresql://your_user:your_password@localhost:5432/cinemadw"
+# Database connection
+DATABASE_URL = "postgresql://amnaalobaidli@localhost/cinemadw"
 engine = create_engine(DATABASE_URL)
+Session = sessionmaker(bind=engine)
+session = Session()
 
-# Sample Data for Dim_Customer
-customers_df = pd.DataFrame({
-    "customerid": range(1, 1001),
-    "name": [f"Customer {i}" for i in range(1, 1001)],
-    "dob": pd.date_range(start='1970-01-01', periods=1000, freq='M').strftime('%Y-%m-%d'),
-    "gender": ["M" if i % 2 == 0 else "F" for i in range(1, 1001)],
-    "agegroup": ["1-10" if i < 10 else "11-20" if i < 20 else "21-30" if i < 30 else "31+" for i in range(1, 1001)]
-})
+Base = declarative_base()
 
-# Insert into Dim_Customer table
-customers_df.to_sql("dim_customer", engine, if_exists="append", index=False)
-print("✅ Inserted rows into Dim_Customer")
+# Define tables
+class DimCustomer(Base):
+    __tablename__ = 'dim_customer'
+    customerid = Column(Integer, primary_key=True)
+    name = Column(String)
+    dob = Column(Date)
+    gender = Column(String)
+    agegroup = Column(String)
 
-# Sample Data for fact_ticketsales
-ticketsales_df = pd.DataFrame({
-    "transactionid": range(1, 1001),
-    "customerid": [i for i in range(1, 1001)],
-    "movieid": [i % 10 + 1 for i in range(1, 1001)],
-    "cinemaid": [i % 5 + 1 for i in range(1, 1001)],
-    "hallid": [i % 3 + 1 for i in range(1, 1001)],
-    "promotionid": [i % 2 + 1 for i in range(1, 1001)],
-    "dateid": pd.date_range(start='2022-01-01', periods=1000, freq='D').strftime('%Y%m%d'),
-    "browserid": [i % 4 + 1 for i in range(1, 1001)],
-    "transactiontype": ["Online" if i % 2 == 0 else "Box Office" for i in range(1, 1001)],
-    "showtime": [f"{i%24:02}:00:00" for i in range(1, 1001)],
-    "totalprice": [i * 10.5 for i in range(1, 1001)],
-    "ticketcount": [i % 5 + 1 for i in range(1, 1001)]
-})
+class DimMovie(Base):
+    __tablename__ = 'dim_movie'
+    movieid = Column(Integer, primary_key=True)
+    title = Column(String)
+    genre = Column(String)
+    releasedate = Column(Date)
 
-# Insert into fact_ticketsales table
-ticketsales_df.to_sql("fact_ticketsales", engine, if_exists="append", index=False)
-print("✅ Inserted rows into fact_ticketsales")
+class FactTicketSales(Base):
+    __tablename__ = 'fact_ticketsales'
+    transactionid = Column(Integer, primary_key=True)
+    customerid = Column(Integer, ForeignKey('dim_customer.customerid'))
+    movieid = Column(Integer, ForeignKey('dim_movie.movieid'))
+    dateid = Column(Date)
+    totalprice = Column(Float)
+    ticketcount = Column(Integer)
+
+# Reset and recreate the database
+def reset_database():
+    Base.metadata.drop_all(engine)
+    Base.metadata.create_all(engine)
+
+# Generate customers
+def generate_customers(n=5000):
+    customers = []
+    for i in range(n):
+        dob = datetime.date(random.randint(1950, 2010), random.randint(1, 12), random.randint(1, 28))
+        agegroup = 'Under 18' if dob.year > 2006 else '18-40' if dob.year > 1980 else '40+'
+        customers.append(DimCustomer(
+            customerid=i+1,
+            name=f'Customer {i+1}',
+            dob=dob,
+            gender=random.choice(['M', 'F']),
+            agegroup=agegroup
+        ))
+
+    session.bulk_save_objects(customers)  # ✅ Fixed Indentation
+    session.commit()
+    print(f"✅ Inserted {n} customers.")
+    
+# Generate movies
+def generate_movies(n=100):   
+    genres = ['Action', 'Comedy', 'Drama', 'Sci-Fi', 'Horror']
+    movies = []
+    for i in range(n):
+        movies.append(DimMovie(
+            movieid=i+1,
+            title=f'Movie {i+1}',
+            genre=random.choice(genres),
+            releasedate=datetime.date(random.randint(2000, 2023), random.randint(1, 12), random.randint(1, 28))
+        ))
+    session.bulk_save_objects(movies)
+    session.commit()
+    print(f"✅ Inserted {n} movies.")
+
+# Generate ticket sales
+def generate_ticket_sales(n=1000000):
+    transactions = []
+    customers = session.query(DimCustomer.customerid).all()
+    movies = session.query(DimMovie.movieid).all()
+
+    if not customers or not movies:
+        print("❌ Error: No customers or movies found!")
+        return  # ✅ Fixed Indentation
+    
+    customers = [c[0] for c in customers]
+    movies = [m[0] for m in movies]
+    
+    for i in range(n):
+        transactions.append(FactTicketSales(
+            transactionid=i+1,
+            customerid=random.choice(customers),
+            movieid=random.choice(movies),
+            dateid=datetime.date(random.randint(2014, 2024), random.randint(1, 12), random.randint(1, 28)),
+            totalprice=round(random.uniform(5, 30), 2),
+            ticketcount=random.randint(1, 5)
+        ))  
+        
+        if i % 100000 == 0:  # Commit in batches
+            session.bulk_save_objects(transactions)
+            session.commit()
+            transactions = []
+            print(f"✅ Inserted {i} ticket sales...")
+    
+    session.bulk_save_objects(transactions)
+    session.commit()
+    print(f"✅ Inserted {n} ticket sales.")
+
+# Run the script
+def main():
+    print("♻ Resetting Database...")  # ✅ Fixed Indentation
+    reset_database()
+    
+    print("📌 Generating Customers...")
+    generate_customers()
+    
+    print("📌 Generating Movies...")
+    generate_movies()
+            
+    print("📌 Generating Ticket Sales...")
+    generate_ticket_sales()
+            
+    print("✅ Database Population Completed Successfully!")
+            
+if __name__ == "__main__":
+    main()
