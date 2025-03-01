@@ -1,7 +1,7 @@
 import random
 import datetime
-from sqlalchemy import create_engine, Column, Integer, String, Date, ForeignKey, Float
-from sqlalchemy.orm import declarative_base, sessionmaker
+from sqlalchemy import create_engine, Column, Integer, String, Date, ForeignKey, Float, text
+from sqlalchemy.orm import declarative_base, sessionmaker, relationship
 
 # Database connection
 DATABASE_URL = "postgresql://amnaalobaidli@localhost/cinemadw"
@@ -20,12 +20,19 @@ class DimCustomer(Base):
     gender = Column(String)
     agegroup = Column(String)
 
+class DimDirector(Base):
+    __tablename__ = 'dim_director'
+    directorid = Column(Integer, primary_key=True, autoincrement=True)
+    name = Column(String, nullable=False)
+
 class DimMovie(Base):
     __tablename__ = 'dim_movie'
     movieid = Column(Integer, primary_key=True)
     title = Column(String)
     genre = Column(String)
     releasedate = Column(Date)
+    directorid = Column(Integer, ForeignKey('dim_director.directorid'))
+    director = relationship("DimDirector", backref="movies")
 
 class FactTicketSales(Base):
     __tablename__ = 'fact_ticketsales'
@@ -38,10 +45,14 @@ class FactTicketSales(Base):
 
 # Reset and recreate the database
 def reset_database():
-    Base.metadata.drop_all(engine)
+    with engine.connect() as connection:
+        connection.execute(text("DROP SCHEMA public CASCADE;"))
+        connection.execute(text("CREATE SCHEMA public;"))
+        connection.commit()
+    
     Base.metadata.create_all(engine)
 
-# Generate customers
+# Generate synthetic data
 def generate_customers(n=5000):
     customers = []
     for i in range(n):
@@ -54,27 +65,43 @@ def generate_customers(n=5000):
             gender=random.choice(['M', 'F']),
             agegroup=agegroup
         ))
-
-    session.bulk_save_objects(customers)  # ✅ Fixed Indentation
+    
+    session.bulk_save_objects(customers)
     session.commit()
     print(f"✅ Inserted {n} customers.")
-    
-# Generate movies
-def generate_movies(n=100):   
+
+def generate_directors():
+    directors = [
+        "Christopher Nolan", "Steven Spielberg", "Quentin Tarantino",
+        "Martin Scorsese", "James Cameron", "Ridley Scott", "Peter Jackson"
+    ]
+    director_objects = [DimDirector(name=name) for name in directors]
+    session.bulk_save_objects(director_objects)
+    session.commit()
+    print(f"✅ Inserted {len(directors)} directors.")
+
+def generate_movies(n=100):
     genres = ['Action', 'Comedy', 'Drama', 'Sci-Fi', 'Horror']
+    directors = session.query(DimDirector.directorid).all()
+    
+    if not directors:
+        print("❌ Error: No directors found!")
+        return
+
     movies = []
     for i in range(n):
         movies.append(DimMovie(
             movieid=i+1,
             title=f'Movie {i+1}',
             genre=random.choice(genres),
-            releasedate=datetime.date(random.randint(2000, 2023), random.randint(1, 12), random.randint(1, 28))
+            releasedate=datetime.date(random.randint(2000, 2023), random.randint(1, 12), random.randint(1, 28)),
+            directorid=random.choice(directors)[0]
         ))
+
     session.bulk_save_objects(movies)
     session.commit()
     print(f"✅ Inserted {n} movies.")
 
-# Generate ticket sales
 def generate_ticket_sales(n=1000000):
     transactions = []
     customers = session.query(DimCustomer.customerid).all()
@@ -82,46 +109,46 @@ def generate_ticket_sales(n=1000000):
 
     if not customers or not movies:
         print("❌ Error: No customers or movies found!")
-        return  # ✅ Fixed Indentation
-    
-    customers = [c[0] for c in customers]
-    movies = [m[0] for m in movies]
-    
+        return
+
     for i in range(n):
         transactions.append(FactTicketSales(
             transactionid=i+1,
-            customerid=random.choice(customers),
-            movieid=random.choice(movies),
+            customerid=random.choice(customers)[0],
+            movieid=random.choice(movies)[0],
             dateid=datetime.date(random.randint(2014, 2024), random.randint(1, 12), random.randint(1, 28)),
             totalprice=round(random.uniform(5, 30), 2),
             ticketcount=random.randint(1, 5)
-        ))  
-        
-        if i % 100000 == 0:  # Commit in batches
+        ))
+
+        if i % 100000 == 0 and i > 0:  # Commit in batches for performance
             session.bulk_save_objects(transactions)
             session.commit()
             transactions = []
             print(f"✅ Inserted {i} ticket sales...")
-    
+
     session.bulk_save_objects(transactions)
     session.commit()
     print(f"✅ Inserted {n} ticket sales.")
 
 # Run the script
 def main():
-    print("♻ Resetting Database...")  # ✅ Fixed Indentation
+    print("🔄 Resetting Database...")
     reset_database()
-    
-    print("📌 Generating Customers...")
+
+    print("🎬 Generating Directors...")
+    generate_directors()
+
+    print("👥 Generating Customers...")
     generate_customers()
-    
-    print("📌 Generating Movies...")
+
+    print("🎞️ Generating Movies...")
     generate_movies()
-            
-    print("📌 Generating Ticket Sales...")
+
+    print("🎟️ Generating Ticket Sales...")
     generate_ticket_sales()
-            
+
     print("✅ Database Population Completed Successfully!")
-            
+
 if __name__ == "__main__":
     main()
